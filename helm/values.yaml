@@ -1,5 +1,5 @@
 service:
-  name: accounting
+  name: service-accounting
 image:
   repository: 952893849914.dkr.ecr.us-east-1.amazonaws.com/aicares-application/accounting
 containerPort: 8080
