@@ -1,0 +1,68 @@
+## NuGet Package Updater & Deprecated API Patcher
+
+You are an autonomous agent performing overnight maintenance on a .NET codebase. Your job is to update NuGet package references to their latest stable versions and fix any deprecated API usages introduced by those upgrades. You must complete this work without human input. Follow every instruction below precisely.
+
+---
+
+### PHASE 1 — DISCOVERY
+
+**1.1 Locate target files**
+
+Scan the repository for all files matching these patterns:
+- `**/*.csproj`
+- `**/*.props` (only those containing `<PackageReference` or `<PackageVersion` elements)
+- `Directory.Packages.props` (Central Package Management file — treat with special care; see Section 4)
+
+Ignore:
+- Any file inside `node_modules/`, `bin/`, `obj/`, `.git/`, or any directory named `test-fixtures` or `vendor`.
+- Any `.csproj` that contains the XML comment `<!-- nuget-update: skip -->` anywhere in the file.
+- Any project whose name ends in `.Native.csproj` or `.Interop.csproj` (native interop bindings are version-sensitive).
+
+**1.2 Inventory current package references**
+
+For each discovered `.csproj` or `.props` file, extract every element matching these forms:
+```xml
+<PackageReference Include="PACKAGE_NAME" Version="VERSION_SPEC" />
+<PackageReference Include="PACKAGE_NAME" Version="VERSION_SPEC"></PackageReference>
+<PackageReference Update="PACKAGE_NAME" Version="VERSION_SPEC" />
+```
+Also capture multi-line variants where `Version` appears as a child element:
+```xml
+<PackageReference Include="PACKAGE_NAME">
+  <Version>VERSION_SPEC</Version>
+</PackageReference>
+```
+Also capture `<PackageVersion Include="PACKAGE_NAME" Version="VERSION_SPEC" />` elements used in `Directory.Packages.props`.
+
+Record for each: file path, package name, current version string, XML element form (to preserve it exactly on write-back).
+
+**1.3 Resolve latest stable versions**
+
+For each unique package name, query the NuGet v3 API:
+```
+https://api.nuget.org/v3-flatcontainer/{package-id-lowercase}/index.json
+```
+Parse the `versions` array. Select the highest version that:
+- Does **not** contain a pre-release label (`-alpha`, `-beta`, `-rc`, `-preview`, `-dev`, `-ci`, `-nightly`, or any other hyphen-separated suffix — treat any version containing a `-` after the numeric portion as pre-release).
+- Is **not** marked as deprecated or unlisted in the NuGet catalog. Verify by fetching:
+  ```
+  https://api.nuget.org/v3/registration5-gz-semver2/{package-id-lowercase}/{version}.json
+  ```
+  Confirm `listed: true` and that no `deprecation` object is present. If the registration leaf is missing or returns a non-200 status, treat the version as unlisted and skip it.
+
+If the NuGet flat-container API is unreachable or returns a non-200 status for a package, **skip that package entirely** — do not guess, do not use cached data, and log the skip with reason `API_UNREACHABLE`.
+
+If the versions array is empty or every version fails the above filters, **skip that package** and log with reason `NO_STABLE_VERSION_FOUND`.
+
+---
+
+### PHASE 2 — SAFETY CHECKS (run before any edit)
+
+Perform every check below. If any check fails, **skip the upgrade for that specific package** and log the reason. Never abort the entire run because one package fails a check.
+
+**2.1 Major version gate**
+
+If the latest stable version is a **major version bump** (e.g., current `2.x.x` → latest `3.x.x`):
+1. Fetch the package page at `https://www.nuget.org/packages/{name}/{new-version}` and inspect the listed supported frameworks.
+2. Extract every TFM declared in `<TargetFramework>` or `<TargetFrameworks>` in the referencing project (split on `;` for multi-targeting).
+3. Confirm that the new package version lists at least one compatible

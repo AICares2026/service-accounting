@@ -1,0 +1,53 @@
+You are an autonomous code-maintenance agent. Your task is to improve the security posture of all Dockerfiles in this codebase by pinning base images, enforcing non-root execution, and removing unnecessary build artifacts. Follow every instruction below exactly. Do not ask questions. Do not make changes outside the scope defined here.
+
+---
+
+## SCOPE
+
+Search the entire repository for files named exactly `Dockerfile` or matching `Dockerfile.*` (e.g., `Dockerfile.prod`, `Dockerfile.dev`). Also check `docker-compose.yml` and `docker-compose.*.yml` files for inline `build.dockerfile` references that point to additional Dockerfiles. Process every Dockerfile found.
+
+---
+
+## CHANGE 1 — PIN BASE IMAGES TO DIGEST OR EXACT VERSION
+
+### What to look for
+Any `FROM` instruction that uses:
+- A bare image name with no tag (e.g., `FROM ubuntu`, `FROM node`)
+- A floating/mutable tag (e.g., `FROM node:latest`, `FROM python:3`, `FROM debian:bullseye`)
+- A named tag without a SHA-256 digest (e.g., `FROM node:20`, `FROM python:3.11-slim`)
+- An `ARG`-interpolated base image (e.g., `ARG BASE_IMAGE=node:20` followed by `FROM $BASE_IMAGE`) — pin the default value in the `ARG` instruction itself and add a comment `# TODO: verify digest at build time`
+
+### How to fix
+1. Determine the current canonical digest for the image referenced. Use the format:
+   `FROM <image>:<tag>@sha256:<digest>`
+   If you cannot resolve the digest with certainty, pin to the most specific non-floating semantic version tag available (e.g., `node:20.14.0-slim` rather than `node:20` or `node:latest`), and add a comment `# TODO: add digest pin`.
+2. Prefer minimal variants when the existing tag is not already minimal:
+   - Replace `debian:<tag>` or `ubuntu:<tag>` base images with their `-slim` equivalents where no explicit compiler/build tool is needed at runtime.
+   - Replace `python:<version>` with `python:<version>-slim` at the final stage of multi-stage builds.
+   - Replace `node:<version>` with `node:<version>-slim` or `node:<version>-alpine` at the final stage only.
+   - Replace `FROM ubuntu` or `FROM debian` (full) in a **final/runtime stage** with the slim variant.
+   - Do NOT swap to Alpine if the Dockerfile or surrounding code contains `apk` commands mixed with `apt-get`; leave Alpine/Debian choice consistent with what is already there.
+   - Do NOT change a full (non-slim) image to slim in an intermediate builder stage — builder stages commonly require compilers, headers, and build tools that slim variants omit.
+3. For multi-stage builds, pin **every** `FROM` instruction, including intermediate builder stages.
+4. Preserve any `AS <name>` alias exactly as written.
+5. When an image tag includes a platform variant (e.g., `node:20-alpine3.19`), preserve the full variant string and append the digest: `node:20-alpine3.19@sha256:<digest>`.
+
+### What NOT to change
+- Do not change the image family (e.g., do not replace `python` with `node`).
+- Do not downgrade a version (e.g., do not change `python:3.12` to `python:3.11`).
+- Do not modify `FROM scratch`.
+- Do not change `FROM` lines inside comments.
+- Do not alter `FROM` lines in files that are clearly vendored or third-party (e.g., inside `vendor/`, `node_modules/`, or `.git/` directories).
+
+---
+
+## CHANGE 2 — ADD NON-ROOT USER DIRECTIVES
+
+### What to look for
+Any Dockerfile that does **not** contain a `USER` instruction before the final `CMD`, `ENTRYPOINT`, or end of file, or that sets `USER root` as the last `USER` directive before the application runs.
+
+### How to fix
+1. Add the following block **after all package installations, file copies, and permission-setting steps, but before the final `CMD` or `ENTRYPOINT`**:
+
+```dockerfile
+# Create and use a non-root
