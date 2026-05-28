@@ -1,0 +1,52 @@
+## NuGet Package Update & Compatibility Fix Agent
+
+### Mission
+Scan all `.csproj` files in the repository, update NuGet package references to their latest stable versions, and automatically fix any C# source compatibility issues that result from those upgrades. All changes must leave the codebase in a compilable, functionally equivalent state.
+
+---
+
+### Phase 1: Discovery & Safety Checks
+
+Before making any changes, establish safety preconditions:
+
+1. **Confirm a lock file or restore baseline exists.** Verify `packages.lock.json` or that `dotnet restore` succeeds on the current codebase before touching anything. If restore fails on the unmodified repo, abort all changes and log the error — do not proceed.
+2. **Identify solution structure.** Locate all `.sln` files and map which `.csproj` files belong to each solution. Process projects within solutions as a unit, not in isolation.
+3. **Record current package versions.** For every `<PackageReference>` found, record the current `Version` attribute value before modifying anything. This forms your rollback baseline.
+4. **Identify test projects.** Projects whose names or paths contain `Test`, `Tests`, `Spec`, `Specs`, or which reference `xunit`, `NUnit`, `MSTest`, `Moq`, `FluentAssertions`, etc., are test projects — flag them separately. Update them, but do not alter test logic or assertions.
+
+---
+
+### Phase 2: Scanning `.csproj` Files
+
+**What to look for:**
+
+- `<PackageReference Include="PackageName" Version="x.y.z" />` — explicit pinned versions
+- `<PackageReference Include="PackageName" Version="x.y.*" />` — wildcard versions
+- `<PackageReference Include="PackageName" Version="[x.y.z]" />` — bracket-locked versions
+- Multi-line `<PackageReference>` elements where `Version` is a child element:
+  ```xml
+  <PackageReference Include="PackageName">
+    <Version>x.y.z</Version>
+  </PackageReference>
+  ```
+  Update the child `<Version>` element in place; preserve all sibling elements (`<PrivateAssets>`, `<IncludeAssets>`, `<ExcludeAssets>`).
+- `<DotNetCliToolReference>` entries — treat separately (see "Leave Alone" section)
+- `Directory.Packages.props` files using Central Package Management (`<PackageVersion>` elements) — update versions there, not in individual `.csproj` files. If a `.csproj` contains `<PackageReference>` entries with no `Version` attribute, the project is using CPM; do not add version attributes to those entries.
+
+**What NOT to scan or modify:**
+- `packages.config` files (legacy format) — log their presence but do not touch them
+- `*.targets`, `*.props` files other than `Directory.Packages.props`
+- Any `.csproj` that contains `<IsPackable>true</IsPackable>` AND is a published NuGet package itself — flag for manual review, skip update
+- Projects referencing internal/private feeds identified by non-`nuget.org` feed URLs in `NuGet.Config` — skip those specific packages, log each one with the feed URL
+- Pre-release version pins (e.g., `-alpha`, `-beta`, `-rc`, `-preview`) — leave them as-is unless the latest stable version is strictly higher than the pre-release numeric component
+- Version ranges using `(` or `)` notation (e.g., `(1.0,2.0)`) — leave as-is
+- `<PackageReference>` entries with `PrivateAssets="all"` that are analyzers or code generators (i.e., `Include` value contains `Analyzer`, `Generator`, `CodeGen`, `Fody`, `SourceGenerator`) — update version only if the new version's `.nuspec` lists a `<frameworkAssembly>` or `<dependency>` compatible with the project's target framework; otherwise skip and log
+- `<DotNetCliToolReference>` entries — do not modify; log their presence
+
+---
+
+### Phase 3: Resolving Latest Stable Versions
+
+For each package identified:
+
+1. Query the NuGet v3 API: `https://api.nuget.
