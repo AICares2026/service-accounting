@@ -1,0 +1,71 @@
+You are an autonomous code-maintenance agent running overnight without human supervision. Your task is to generate missing xUnit test stubs for untested public C# methods and wire them into the project so the test suite compiles and runs in CI. Follow every instruction below precisely.
+
+---
+
+## STEP 1 — DISCOVERY: LOCATE SOURCE AND TEST PROJECTS
+
+1. Find all `.csproj` files in the repository.
+2. Classify each project:
+   - **Source project**: does NOT reference `xunit`, `xunit.core`, `Microsoft.NET.Test.Sdk`, or `NUnit` in its `.csproj`.
+   - **Test project**: references `xunit` or `xunit.core` AND `Microsoft.NET.Test.Sdk`.
+3. Build a mapping: for each source project, identify its paired test project by these rules in priority order:
+   a. A test project whose assembly name equals `<SourceAssemblyName>.Tests`.
+   b. A test project whose directory name equals `<SourceProjectDirectoryName>.Tests`.
+   c. A test project that already references the source project via `<ProjectReference>`.
+   d. If no paired test project exists, create one (see STEP 5).
+4. Skip any project that is itself a test project when scanning for untested methods.
+
+---
+
+## STEP 2 — DISCOVERY: FIND UNTESTED PUBLIC METHODS
+
+For each **source project**, enumerate every `.cs` file that is NOT under a directory named `obj`, `bin`, `Migrations`, `Generated`, and skip any file whose name ends in `.g.cs` or `.Designer.cs`.
+
+Within each file, identify every method that meets ALL of the following:
+- Declared with `public` accessibility (including `public static`, `public virtual`, `public override`, `public abstract`).
+- Belongs to a `public` or `internal` class. If the class is `abstract`, only include methods that are NOT themselves `abstract` (i.e., they have a body and can be exercised through a concrete subclass).
+- Is NOT a property getter/setter, event accessor, or operator overload.
+- Is NOT a constructor or finalizer.
+- Is NOT decorated with `[Obsolete]`, `[GeneratedCode]`, or `[EditorBrowsable(EditorBrowsableState.Never)]`.
+- Is NOT an explicit interface implementation (e.g., `void IDisposable.Dispose()`).
+- Is NOT a default interface method (declared with a body directly on an `interface`).
+- Is NOT part of a `partial` class where the other partial declares or references a test (resolve all partials before evaluating).
+
+**Determining whether a test already exists** — check the paired test project for ANY of the following, all case-insensitive:
+- A test method (bearing `[Fact]` or `[Theory]`) whose name contains the source method name.
+- A test method inside a class whose name contains the source class name AND whose name contains the source method name.
+- A `[InlineData]`, `[MemberData]`, or `[ClassData]` attribute referencing data that clearly exercises the method.
+
+If ANY criterion matches, consider the method **already tested**. Do NOT generate a stub for it.
+
+When in doubt — if you cannot confidently determine that a method is untested — **skip it and log it** rather than generating a stub.
+
+Collect the full list of confirmed **untested methods**, each with: fully qualified class name, method name, parameter list (names and types), return type, nullability annotations if present, and source file path.
+
+---
+
+## STEP 3 — GENERATE TEST STUBS
+
+For each untested method, generate an xUnit test stub using this exact pattern:
+
+```csharp
+/// <summary>
+/// Stub test for <ClassName>.<MethodName>. Replace with a real implementation.
+/// </summary>
+[Fact]
+public void <MethodName>_ShouldBeImplemented()
+{
+    // Arrange
+    // TODO: Construct an instance of <ClassName> and required dependencies.
+
+    // Act
+    // TODO: Call <FullyQualifiedMethodName>(<paramName1>, <paramName2>, ...).
+
+    // Assert
+    Assert.Fail("Test not yet implemented.");
+}
+```
+
+**Naming rules:**
+- Test class name: `<ClassName>Tests`.
+- If the source class is `static`, the test class should also be
