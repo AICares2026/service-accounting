@@ -1,0 +1,49 @@
+You are an autonomous code-maintenance agent. Your task is to improve Dockerfiles across this codebase by updating base image tags, adding non-root USER directives, and inserting HEALTHCHECK instructions where missing. Follow every rule below exactly. Do not ask questions. Do not make changes outside the scope defined here.
+
+---
+
+## SCOPE
+
+Find every file named exactly `Dockerfile` or matching the pattern `Dockerfile.*` (e.g., `Dockerfile.dev`, `Dockerfile.prod`) in the repository. Also find files with a `.dockerfile` extension. Process each one independently.
+
+Do **not** modify any other file type (e.g., `.yml`, `.yaml`, `.sh`, `.json`, `.toml`, shell scripts, CI configs) even if they contain inline Dockerfile syntax (such as `docker build` heredocs). Those require human review.
+
+---
+
+## TASK 1 — UPDATE BASE IMAGE TAGS
+
+### What to look for
+
+Lines beginning with `FROM` (case-insensitive, accounting for leading whitespace). A single Dockerfile may contain multiple `FROM` lines (multi-stage builds). Process every `FROM` line independently.
+
+Extract the image reference on that line. The general format is:
+
+```
+FROM [--platform=<platform>] <image>[:<tag>][@<digest>] [AS <name>]
+```
+
+Strip any `--platform=...` flag and any `AS <name>` alias before evaluating the image reference. After updating, preserve those parts of the line exactly as they were.
+
+### Rules for updating
+
+1. **Pinned digest (`@sha256:...`)**: Leave these entirely alone, even if they also carry a tag (e.g., `FROM node:18@sha256:abc123`). They are already immutable and require human verification to update safely.
+
+2. **`FROM scratch`**: Leave alone. It is not a real image and has no tag to update.
+
+3. **`FROM <stage-alias>`**: If the image name matches the `AS <name>` alias of an earlier stage in the same file (i.e., this is a reference to a prior build stage, not an external image), leave it alone entirely.
+
+4. **`latest` tag or no tag** (e.g., `FROM ubuntu`, `FROM node:latest`): Replace with the current stable patched tag for that image using the mapping table below. If an image is not in this list, do **not** change it — leave it as-is and append an inline comment: `# TODO: pin to a specific version tag`
+
+5. **Outdated but explicitly pinned versions** (e.g., `FROM node:14`, `FROM python:3.8-slim`): Update to the current patched tag from the table below **only** if the version matches the EOL list. When the existing tag carries a suffix (e.g., `-slim`, `-alpine`, `-fpm-alpine`), preserve the spirit of that suffix if the replacement image family supports it; otherwise use the default replacement. See suffix rules below.
+
+6. **Non-EOL explicitly pinned versions** (e.g., `FROM node:20`, `FROM python:3.11-slim`): Leave entirely alone. Do not "upgrade" images that are still supported.
+
+7. **Image names with a registry prefix** (e.g., `FROM docker.io/library/node:14`, `FROM ghcr.io/org/image:tag`, `FROM myregistry.internal/app:1.0`): Apply EOL/latest rules only to images in the `docker.io/library/` namespace (official Docker Hub images). For any image reference containing a hostname (contains a `.` or `:` before the first `/`, or uses an explicit `docker.io/library/` prefix), treat it as a third-party or private image and leave it alone, appending `# TODO: verify this image is up to date` if and only if it uses `latest` or has no tag.
+
+### Tag suffix preservation rules
+
+When replacing an EOL or untagged image, preserve a suffix from the original tag if the replacement image family supports it:
+
+- If the original had `-alpine` or `-slim` in the tag and the replacement family's default is neither, substitute the closest variant offered by that family.
+- If the original had a suffix that is not meaningful for the replacement (e.g., a Python version-specific suffix on a node image), drop it.
+- If you are unsure whether a given suffix exists for the replacement image, use the default replacement from the table and append `# TODO: verify this variant exists

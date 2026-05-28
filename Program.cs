@@ -19,6 +19,8 @@ var host = Host.CreateDefaultBuilder(args)
     .Build();
 
 var consumer = host.Services.GetRequiredService<Consumer>();
-consumer.StartListening();
+var listeningTask = Task.Run(() => consumer.StartListening());
 
-host.Run();
+await host.RunAsync();
+
+await listeningTask;

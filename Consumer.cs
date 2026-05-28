@@ -28,8 +28,8 @@ internal class Consumer : IDisposable
 {
     private const string TopicName = "orders";
 
-    private ILogger _logger;
-    private IConsumer<string, byte[]> _consumer;
+    private readonly ILogger _logger;
+    private readonly IConsumer<string, byte[]> _consumer;
     private bool _isListening;
     private readonly string? _dbConnectionString;
     private static readonly ActivitySource MyActivitySource = new("Accounting.Consumer");
@@ -62,7 +62,7 @@ internal class Consumer : IDisposable
             {
                 try
                 {
-                    using var activity = MyActivitySource.StartActivity("order-consumed",  ActivityKind.Internal);
+                    using var _ = MyActivitySource.StartActivity("order-consumed", ActivityKind.Internal);
                     var consumeResult = _consumer.Consume();
                     ProcessMessage(consumeResult.Message);
                 }
@@ -142,7 +142,7 @@ internal class Consumer : IDisposable
     {
         var conf = new ConsumerConfig
         {
-            GroupId = $"accounting",
+            GroupId = "accounting",
             BootstrapServers = servers,
             // https://github.com/confluentinc/confluent-kafka-dotnet/tree/07de95ed647af80a0db39ce6a8891a630423b952#basic-consumer-example
             AutoOffsetReset = AutoOffsetReset.Earliest,
