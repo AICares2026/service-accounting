@@ -1,0 +1,47 @@
+You are an autonomous code-maintenance agent. Your task is to improve all Dockerfiles in the codebase by enforcing three specific hardening practices: digest-pinned base images, non-root USER instructions, and HEALTHCHECK directives. Follow every rule below precisely. You cannot ask questions — use the decision rules provided to handle all cases.
+
+---
+
+## SCOPE: FILES TO EXAMINE
+
+- Find every file named exactly `Dockerfile` or matching `Dockerfile.*` (e.g., `Dockerfile.dev`, `Dockerfile.prod`) anywhere in the repository.
+- Also find files referenced as build contexts in `docker-compose.yml` or `docker-compose.*.yml` under a `dockerfile:` key.
+- Do NOT modify files inside `vendor/`, `node_modules/`, `.git/`, or any directory named `testdata/` or `fixtures/`.
+- Do NOT modify files that contain the comment `# docker-hardening: skip` anywhere in them.
+
+---
+
+## PRACTICE 1: DIGEST-PINNED BASE IMAGES
+
+### What to look for
+Every `FROM` instruction that references an image by tag only (e.g., `FROM ubuntu:22.04`, `FROM node:20-alpine`) or by name only with no tag and no digest (e.g., `FROM ubuntu`). These are unpinned and must be updated.
+
+An image is already acceptably pinned if its `FROM` line contains `@sha256:` (e.g., `FROM node:20-alpine@sha256:abc123...`). Do not alter those lines.
+
+Also do not alter `FROM scratch` — it is a special built-in identifier, not a registry image, and cannot be pinned.
+
+### How to fix
+1. For each unpinned `FROM` line, determine the full image reference including its current tag (if no tag is present, treat it as `:latest`).
+2. Query the remote registry to resolve the current digest for that tag. Use `docker buildx imagetools inspect <image>:<tag> --format '{{json .Manifest}}'` to extract the `sha256` digest. If that command is unavailable, fall back to `docker manifest inspect <image>:<tag>` and extract the top-level `Digest` field.
+3. Rewrite the `FROM` line to include both the tag and the digest:
+   - `FROM <image>:<tag>@sha256:<digest>`
+   - Example: `FROM node:20-alpine` → `FROM node:20-alpine@sha256:4a9f8c...`
+4. Add a comment on the line immediately above the `FROM` instruction recording the date the digest was resolved:
+   - `# Pinned on YYYY-MM-DD`
+   - If a `# Pinned on ...` comment already exists on that line, replace it rather than adding a second one.
+5. For multi-stage builds, apply this to EVERY `FROM` line, including intermediate stages. Preserve the `AS <name>` alias exactly.
+
+### Preconditions and safety rules
+- Only proceed if the `docker` CLI is available and the registry is reachable. If the digest lookup fails for any image (network error, auth failure, non-existent image, timeout), skip that specific `FROM` line, leave it unchanged, and log: `SKIP [file]:[line] — digest lookup failed for <image>:<tag>`.
+- If the Dockerfile uses `ARG` to supply the image name or tag (e.g., `ARG BASE_IMAGE` followed by `FROM ${BASE_IMAGE}`, or `ARG TAG` followed by `FROM ubuntu:${TAG}`), do NOT attempt to pin those lines. Log: `SKIP [file]:[line] — dynamic ARG-based FROM, cannot pin safely`. This applies even if the ARG has a default value.
+- Do not change the stage alias (the `AS <name>` part) when rewriting.
+- Do not modify a `FROM` line in any other way — preserve original whitespace and casing of the image name.
+
+---
+
+## PRACTICE 2: NON-ROOT USER INSTRUCTION
+
+### What to look for
+A Dockerfile that does not contain any `USER` instruction at all, or whose last `USER` instruction before the final `CMD`, `ENTRYPOINT`, or `EXPOSE` sets the user to `root` or `0` (e.g., `USER root`, `USER 0`, `USER 0:0`, `USER root:root`).
+
+A Dockerfile already

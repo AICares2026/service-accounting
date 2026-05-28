@@ -142,7 +142,7 @@ internal class Consumer : IDisposable
     {
         var conf = new ConsumerConfig
         {
-            GroupId = $"accounting",
+            GroupId = "accounting",
             BootstrapServers = servers,
             // https://github.com/confluentinc/confluent-kafka-dotnet/tree/07de95ed647af80a0db39ce6a8891a630423b952#basic-consumer-example
             AutoOffsetReset = AutoOffsetReset.Earliest,

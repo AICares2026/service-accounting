@@ -1,0 +1,62 @@
+## NuGet Package Update & API Migration Agent
+
+### Mission
+Scan all `.csproj` files in the repository for outdated NuGet package references, update them to their latest stable versions, and apply any corresponding using-directive or API changes required in C# source files. All changes must be safe, reversible, and leave the codebase in a buildable state.
+
+---
+
+### Step 0: Pre-Flight Checks
+
+Before making any changes, perform the following checks and abort (log reason, make no edits) if any fail:
+
+1. **Git working tree:** Confirm the repository has no uncommitted changes (`git status --porcelain` returns empty). If dirty, abort and instruct the user to commit or stash first.
+2. **Branch hygiene:** Confirm the current branch is not `main`, `master`, `release/*`, or `production`. If it is, abort and instruct the user to create a feature branch.
+3. **Build baseline:** Run `dotnet build` (or the repo's documented build command if present in a `README.md`, `Makefile`, or `.github/workflows/` file). If the build fails before any changes, abort — do not attempt updates on a broken codebase.
+4. **Lock file detection:** If a `packages.lock.json` file exists in any project directory, note it — lock files must be regenerated after updates (see Step 6).
+5. **Central Package Management:** Check every `Directory.Build.props` and `Directory.Packages.props` file reachable from the repo root for `<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>`. If found anywhere, **stop entirely** — do not modify any file. Log: `"Central Package Management detected in [file path]. All version management must go through Directory.Packages.props. No changes made."`
+
+---
+
+### Step 1: Discover Package References
+
+Recursively scan every `.csproj` file in the repository. Identify all `<PackageReference>` elements.
+
+**Forms to update** (exact pinned versions only):
+```xml
+<PackageReference Include="PackageName" Version="x.y.z" />
+<PackageReference Include="PackageName" Version="x.y.z.w" />
+```
+
+**Forms to leave entirely unchanged** (do not modify, do not log as candidates):
+- Floating ranges: `Version="[1.0, 2.0)"`, `Version="(, 2.0]"`, or any bracket notation.
+- Wildcards: `Version="*"`, `Version="1.*"`, `Version="1.2.*"`.
+- Pre-release pins: `Version="8.0.0-rc.1"` — leave as-is; do not attempt to resolve a stable replacement automatically. Log these for human review.
+
+**Analyzer / tool packages** (those with `PrivateAssets="all"` or `<IncludeAssets>` containing `analyzers`): update their versions normally in the `.csproj` but skip Step 5 source-code analysis for them — they have no runtime API surface.
+
+**Excluded directories** — skip `.csproj` files located under any of the following directory names at any path depth. Match on path segments, not substrings (i.e., a directory literally named `samples`, not a directory named `resamples`):
+- `samples`
+- `examples`
+- `docs`
+- `tools`
+- `test` / `tests` — **do not update test projects automatically**; log them separately for human review (test projects frequently pin specific versions intentionally).
+
+---
+
+### Step 2: Resolve Latest Stable Versions
+
+For each discovered package, query:
+
+```
+GET https://api.nuget.org/v3-flatcontainer/{packageid-lowercase}/index.json
+```
+
+Parse the `versions` array. Select the **latest stable version** by:
+1. Excluding any version string containing a hyphen (e.g., `-alpha`, `-beta`, `-rc`, `-preview`, `-dev`, `-ci`, `-nightly`, or any hyphenated suffix regardless of label).
+2. Parsing remaining entries as semantic versions (major.minor.patch or major.minor.patch.revision).
+3. Selecting the numerically highest version.
+
+**Do not upgrade to pre-release versions under any circumstance.**
+
+**Error handling:**
+- HTTP error or timeout: skip the package, log `"WARNING: Could not reach NuGet
