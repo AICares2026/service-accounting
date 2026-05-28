@@ -33,4 +33,7 @@ RUN chown app "/app/instrument.sh"
 USER app
 ENV OTEL_DOTNET_AUTO_TRACES_ADDITIONAL_SOURCES=Accounting.Consumer
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD pgrep -x dotnet > /dev/null || exit 1
+
 ENTRYPOINT ["./instrument.sh", "dotnet", "Accounting.dll"]
